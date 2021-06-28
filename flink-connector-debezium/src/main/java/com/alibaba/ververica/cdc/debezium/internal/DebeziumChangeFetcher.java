@@ -252,9 +252,14 @@ public class DebeziumChangeFetcher<T> {
         }
 
         Struct source = value.getStruct(Envelope.FieldName.SOURCE);
-        if (source.schema().field(Envelope.FieldName.TIMESTAMP) == null) {
-            return;
+        try {
+            if (source.schema().field(Envelope.FieldName.TIMESTAMP) == null) {
+                return;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
+
 
         Long tsMs = source.getInt64(Envelope.FieldName.TIMESTAMP);
         if (tsMs != null) {

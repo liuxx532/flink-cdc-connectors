@@ -50,8 +50,6 @@ import org.bson.BsonTimestamp;
 import org.bson.BsonUndefined;
 import org.bson.BsonValue;
 import org.bson.types.Decimal128;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.lang.reflect.Array;
@@ -77,9 +75,6 @@ public class MongoDBConnectorDeserializationSchema
         implements DebeziumDeserializationSchema<RowData> {
 
     private static final long serialVersionUID = 1750787080613035184L;
-
-    private static final Logger LOG =
-            LoggerFactory.getLogger(MongoDBConnectorDeserializationSchema.class);
 
     private static final String FULL_DOCUMENT_FIELD = "fullDocument";
 
@@ -128,9 +123,8 @@ public class MongoDBConnectorDeserializationSchema
                 break;
             case UPDATE:
                 // It’s null if another operation deletes the document
-                // before the lookup operation happens.
+                // before the lookup operation happens. Ignored it.
                 if (fullDocument == null) {
-                    LOG.info("Ignored change record of type {} cause full document is empty", op);
                     break;
                 }
                 GenericRowData updateAfter = extractRowData(fullDocument);
@@ -148,9 +142,6 @@ public class MongoDBConnectorDeserializationSchema
             case RENAME:
             case OTHER:
             default:
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Ignored change record of type {}, with full record {}", op, record);
-                }
                 break;
         }
     }

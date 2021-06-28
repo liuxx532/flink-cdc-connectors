@@ -25,6 +25,7 @@ import com.mongodb.client.model.changestream.FullDocument;
 import com.mongodb.kafka.connect.source.MongoSourceConfig;
 import com.mongodb.kafka.connect.source.MongoSourceConfig.ErrorTolerance;
 import com.mongodb.kafka.connect.source.MongoSourceConfig.OutputFormat;
+import io.debezium.heartbeat.Heartbeat;
 
 import java.util.Locale;
 import java.util.Properties;
@@ -38,9 +39,6 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  */
 public class MongoDBSource {
 
-    public static final String OUTPUT_FORMAT_SCHEMA =
-            OutputFormat.SCHEMA.name().toLowerCase(Locale.ROOT);
-
     public static final String ERROR_TOLERANCE_NONE = ErrorTolerance.NONE.value();
 
     public static final String ERROR_TOLERANCE_ALL = ErrorTolerance.ALL.value();
@@ -50,6 +48,50 @@ public class MongoDBSource {
     public static final int POLL_MAX_BATCH_SIZE_DEFAULT = 1000;
 
     public static final int POLL_AWAIT_TIME_MILLIS_DEFAULT = 1500;
+
+    public static final String HEARTBEAT_TOPIC_NAME_DEFAULT = "__mongodb_heartbeats";
+
+    public static final String OUTPUT_FORMAT_SCHEMA =
+            OutputFormat.SCHEMA.name().toLowerCase(Locale.ROOT);
+
+    // Add "source" field to adapt to debezium SourceRecord
+    public static final String OUTPUT_SCHEMA_VALUE_DEFAULT =
+            "{"
+                    + "  \"name\": \"ChangeStream\","
+                    + "  \"type\": \"record\","
+                    + "  \"fields\": ["
+                    + "    { \"name\": \"_id\", \"type\": \"string\" },"
+                    + "    { \"name\": \"operationType\", \"type\": [\"string\", \"null\"] },"
+                    + "    { \"name\": \"fullDocument\", \"type\": [\"string\", \"null\"] },"
+                    + "    { \"name\": \"source\","
+                    + "      \"type\": [{\"name\": \"source\", \"type\": \"record\", \"fields\": ["
+                    + "                {\"name\": \"ts_ms\", \"type\": \"long\"},"
+                    + "                {\"name\": \"snapshot\", \"type\": [\"string\", \"null\"] } ]"
+                    + "               }, \"null\" ] },"
+                    + "    { \"name\": \"ns\","
+                    + "      \"type\": [{\"name\": \"ns\", \"type\": \"record\", \"fields\": ["
+                    + "                {\"name\": \"db\", \"type\": \"string\"},"
+                    + "                {\"name\": \"coll\", \"type\": [\"string\", \"null\"] } ]"
+                    + "               }, \"null\" ] },"
+                    + "    { \"name\": \"to\","
+                    + "      \"type\": [{\"name\": \"to\", \"type\": \"record\",  \"fields\": ["
+                    + "                {\"name\": \"db\", \"type\": \"string\"},"
+                    + "                {\"name\": \"coll\", \"type\": [\"string\", \"null\"] } ]"
+                    + "               }, \"null\" ] },"
+                    + "    { \"name\": \"documentKey\", \"type\": [\"string\", \"null\"] },"
+                    + "    { \"name\": \"updateDescription\","
+                    + "      \"type\": [{\"name\": \"updateDescription\",  \"type\": \"record\", \"fields\": ["
+                    + "                 {\"name\": \"updatedFields\", \"type\": [\"string\", \"null\"]},"
+                    + "                 {\"name\": \"removedFields\","
+                    + "                  \"type\": [{\"type\": \"array\", \"items\": \"string\"}, \"null\"]"
+                    + "                  }] }, \"null\"] },"
+                    + "    { \"name\": \"clusterTime\", \"type\": [\"string\", \"null\"] },"
+                    + "    { \"name\": \"txnNumber\", \"type\": [\"long\", \"null\"]},"
+                    + "    { \"name\": \"lsid\", \"type\": [{\"name\": \"lsid\", \"type\": \"record\","
+                    + "               \"fields\": [ {\"name\": \"id\", \"type\": \"string\"},"
+                    + "                             {\"name\": \"uid\", \"type\": \"string\"}] }, \"null\"] }"
+                    + "  ]"
+                    + "}";
 
     public static <T> Builder<T> builder() {
         return new Builder<>();
@@ -260,11 +302,13 @@ public class MongoDBSource {
                     MongoSourceConfig.PUBLISH_FULL_DOCUMENT_ONLY_CONFIG,
                     String.valueOf(Boolean.FALSE));
 
+            props.setProperty(MongoSourceConfig.OUTPUT_FORMAT_KEY_CONFIG, OUTPUT_FORMAT_SCHEMA);
+            props.setProperty(MongoSourceConfig.OUTPUT_FORMAT_VALUE_CONFIG, OUTPUT_FORMAT_SCHEMA);
             props.setProperty(
                     MongoSourceConfig.OUTPUT_SCHEMA_INFER_VALUE_CONFIG,
                     String.valueOf(Boolean.FALSE));
-            props.setProperty(MongoSourceConfig.OUTPUT_FORMAT_KEY_CONFIG, OUTPUT_FORMAT_SCHEMA);
-            props.setProperty(MongoSourceConfig.OUTPUT_FORMAT_VALUE_CONFIG, OUTPUT_FORMAT_SCHEMA);
+            props.setProperty(
+                    MongoSourceConfig.OUTPUT_SCHEMA_VALUE_CONFIG, OUTPUT_SCHEMA_VALUE_DEFAULT);
 
             if (pipeline != null) {
                 props.setProperty(MongoSourceConfig.PIPELINE_CONFIG, pipeline);
@@ -324,7 +368,14 @@ public class MongoDBSource {
                         String.valueOf(heartbeatIntervalMillis));
             }
 
-            return new MongoDBDebeziumSourceFunction<>(deserializer, props, null);
+            props.setProperty(
+                    MongoSourceConfig.HEARTBEAT_TOPIC_NAME_CONFIG, HEARTBEAT_TOPIC_NAME_DEFAULT);
+
+            // Let DebeziumChangeFetcher recognize heartbeat record
+            props.setProperty(
+                    Heartbeat.HEARTBEAT_TOPICS_PREFIX.name(), HEARTBEAT_TOPIC_NAME_DEFAULT);
+
+            return new DebeziumSourceFunction<>(deserializer, props, null);
         }
     }
 }

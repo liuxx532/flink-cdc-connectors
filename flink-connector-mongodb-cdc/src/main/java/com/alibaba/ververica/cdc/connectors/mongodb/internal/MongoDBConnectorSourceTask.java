@@ -19,14 +19,18 @@
 package com.alibaba.ververica.cdc.connectors.mongodb.internal;
 
 import com.mongodb.kafka.connect.source.MongoSourceTask;
+import io.debezium.connector.AbstractSourceInfo;
+import io.debezium.connector.SnapshotRecord;
+import io.debezium.data.Envelope;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 import org.apache.kafka.connect.source.SourceTaskContext;
+import org.bson.json.JsonReader;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +45,8 @@ public class MongoDBConnectorSourceTask extends SourceTask {
     private static final String COPY_KEY = "copy";
 
     private static final String TRUE = "true";
+
+    private static final String CLUSTER_TIME_FIELD = "clusterTime";
 
     private final MongoSourceTask delegate;
 
@@ -93,6 +99,9 @@ public class MongoDBConnectorSourceTask extends SourceTask {
         List<SourceRecord> sourceRecords = delegate.poll();
 
         if (!isInSnapshotPhase) {
+            for (SourceRecord current : sourceRecords) {
+                markRecordTimestamp(current);
+            }
             return sourceRecords;
         }
 
@@ -108,25 +117,27 @@ public class MongoDBConnectorSourceTask extends SourceTask {
             return sourceRecords;
         }
 
-        LinkedList<SourceRecord> linkedRecords = new LinkedList<>();
+        List<SourceRecord> outSourceRecords = new LinkedList<>();
         for (SourceRecord current : sourceRecords) {
+            markRecordTimestamp(current);
             if (isSnapshotRecord(current)) {
+                markSnapshotRecord(current);
                 if (lastSnapshotRecord != null) {
-                    linkedRecords.add(lastSnapshotRecord);
+                    outSourceRecords.add(lastSnapshotRecord);
                 }
                 lastSnapshotRecord = current;
             } else {
                 // Received non-snapshot record, then exit the snapshot phase
                 if (lastSnapshotRecord != null) {
-                    linkedRecords.add(markLastSnapshotRecord(lastSnapshotRecord));
+                    outSourceRecords.add(markLastSnapshotRecord(lastSnapshotRecord));
                     lastSnapshotRecord = null;
                     isInSnapshotPhase = false;
                 }
-                linkedRecords.add(current);
+                outSourceRecords.add(current);
             }
         }
 
-        return linkedRecords;
+        return outSourceRecords;
     }
 
     @Override
@@ -134,22 +145,34 @@ public class MongoDBConnectorSourceTask extends SourceTask {
         delegate.stop();
     }
 
-    private SourceRecord markLastSnapshotRecord(SourceRecord record) {
-        if (record == null) {
-            return null;
+    private void markRecordTimestamp(SourceRecord record) {
+        final Struct value = (Struct) record.value();
+        final Struct source = new Struct(value.schema().field(Envelope.FieldName.SOURCE).schema());
+        long timestamp = System.currentTimeMillis();
+        if (value.schema().field(CLUSTER_TIME_FIELD) != null) {
+            String clusterTime = value.getString(CLUSTER_TIME_FIELD);
+            if (clusterTime != null) {
+                timestamp = new JsonReader(clusterTime).readTimestamp().getTime() * 1000L;
+            }
         }
-        Map<String, Object> markedOffset = new HashMap<>(record.sourceOffset());
-        markedOffset.put(COPY_KEY, "last");
+        source.put(AbstractSourceInfo.TIMESTAMP_KEY, timestamp);
+        value.put(Envelope.FieldName.SOURCE, source);
+    }
 
-        return new SourceRecord(
-                record.sourcePartition(),
-                markedOffset,
-                record.topic(),
-                record.kafkaPartition(),
-                record.keySchema(),
-                record.key(),
-                record.valueSchema(),
-                record.value());
+    private void markSnapshotRecord(SourceRecord record) {
+        final Struct value = (Struct) record.value();
+        final Struct source = value.getStruct(Envelope.FieldName.SOURCE);
+        SnapshotRecord.TRUE.toSource(source);
+    }
+
+    private SourceRecord markLastSnapshotRecord(SourceRecord record) {
+        final Struct value = (Struct) record.value();
+        final Struct source = value.getStruct(Envelope.FieldName.SOURCE);
+        final SnapshotRecord snapshot = SnapshotRecord.fromSource(source);
+        if (snapshot == SnapshotRecord.TRUE) {
+            SnapshotRecord.LAST.toSource(source);
+        }
+        return record;
     }
 
     private boolean isSnapshotRecord(SourceRecord sourceRecord) {
@@ -161,7 +184,7 @@ public class MongoDBConnectorSourceTask extends SourceTask {
         try {
             return ((AtomicBoolean) isCopyingField.get(delegate)).get();
         } catch (IllegalAccessException e) {
-            throw new IllegalStateException("can not access isCopying field of SourceTask", e);
+            throw new IllegalStateException("Cannot access isCopying field of SourceTask", e);
         }
     }
 }

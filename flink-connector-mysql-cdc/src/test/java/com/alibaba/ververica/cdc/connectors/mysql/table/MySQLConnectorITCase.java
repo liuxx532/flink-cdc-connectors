@@ -76,8 +76,6 @@ public class MySQLConnectorITCase extends MySQLTestBase {
         return Arrays.asList("non-legacy", "legacy");
     }
 
-    @ClassRule public static LegacyRowResource usesLegacyRows = LegacyRowResource.INSTANCE;
-
     @Before
     public void before() {
         TestValuesTableFactory.clearAllData();
